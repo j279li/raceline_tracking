@@ -46,10 +46,7 @@ def find_lookahead_point(
 
 
 def estimate_curvature(path: ArrayLike, idx: int, step: int = 5) -> float:
-    """
-    Estimate curvature at path index using Menger curvature formula.
-    Returns curvature in 1/meters (higher = tighter corner).
-    """
+    # Original geometric curvature
     N = len(path)
     i1 = (idx - step) % N
     i2 = idx % N
@@ -60,7 +57,8 @@ def estimate_curvature(path: ArrayLike, idx: int, step: int = 5) -> float:
     p3 = path[i3]
 
     area = 0.5 * abs(
-        (p2[0] - p1[0]) * (p3[1] - p1[1]) - (p3[0] - p1[0]) * (p2[1] - p1[1])
+        (p2[0] - p1[0]) * (p3[1] - p1[1])
+        - (p3[0] - p1[0]) * (p2[1] - p1[1])
     )
 
     a = np.linalg.norm(p2 - p1)
@@ -69,10 +67,14 @@ def estimate_curvature(path: ArrayLike, idx: int, step: int = 5) -> float:
 
     denom = a * b * c
     if denom < 1e-9:
-        return 0.0
+        curvature = 0.0
+    else:
+        curvature = 4.0 * area / denom
 
-    curvature = 4.0 * area / denom
-    return float(curvature)
+    # Make it aggressively smaller → much higher corner speeds
+    curvature *= 0.35
+
+    return max(curvature, 0.0005)
 
 
 # ============================================================================
@@ -162,20 +164,6 @@ def compute_reference_velocity(
         if curv > 0.0008:  # catch even slight curves
             safe_speed = compute_safe_corner_speed(curv, v_max)
 
-            # Extra safety margins for raceline
-            if curv > 0.030:
-                safe_speed *= 0.80
-            elif curv > 0.020:
-                safe_speed *= 0.86
-            elif curv > 0.012:
-                safe_speed *= 0.92
-            elif curv > 0.006:
-                safe_speed *= 0.96
-            elif curv > 0.003:
-                safe_speed *= 0.985
-            else:
-                safe_speed *= 0.998
-
             if safe_speed < min_safe_speed:
                 min_safe_speed = safe_speed
                 distance_to_corner = cumulative_distance
@@ -189,7 +177,7 @@ def compute_reference_velocity(
             current_speed, min_safe_speed, brake_accel
         )
 
-        safety_margin = 1.22
+        safety_margin = 1.05
         required_brake_distance *= safety_margin
 
         if distance_to_corner <= required_brake_distance:
@@ -220,11 +208,12 @@ def compute_reference_steering(
 
     # Speed-based lookahead (shorter for raceline)
     if speed < 50:
-        lookahead_distance = 8.0 + 0.30 * speed
+        lookahead_distance = 6.0 + 0.15 * speed
     else:
-        lookahead_distance = 23.0 + 0.45 * (speed - 50)
-    
-    lookahead_distance *= 0.9  # Shorter lookahead for raceline
+        lookahead_distance = 13.0 + 0.20 * (speed - 50)
+
+    # shorter lookahead = sharper turns at high speed
+    lookahead_distance *= 0.75
 
     _, lookahead_point = find_lookahead_point(state, path, lookahead_distance)
 
@@ -249,7 +238,7 @@ def compute_reference_steering(
 
     alpha = np.arctan2(ly, lx)
 
-    pure_pursuit_steer = np.arctan2(2.0 * wheelbase * np.sin(alpha), Ld)
+    pure_pursuit_steer = np.arctan(3.0 * wheelbase * np.sin(alpha) / Ld)
 
     # Stanley correction
     closest_idx, _ = find_closest_point(state, path)
@@ -266,15 +255,15 @@ def compute_reference_steering(
 
     cross_track_error = path_vec[0] * to_car[1] - path_vec[1] * to_car[0]
 
-    k_stanley = 0.8  # Raceline mode
+    k_stanley = 1.8  # Raceline mode
     stanley_correction = np.arctan(
         k_stanley * cross_track_error / max(abs(speed), 2.0)
     )
 
-    correction_weight = 0.22  # Raceline mode
+    correction_weight = 0.4  # Raceline mode
     delta_ref = pure_pursuit_steer + correction_weight * stanley_correction
 
-    delta_ref = float(np.clip(delta_ref, -0.9 * delta_max, 0.9 * delta_max))
+    delta_ref = float(np.clip(delta_ref, -delta_max, delta_max))
     return delta_ref
 
 
@@ -335,15 +324,15 @@ def steering_controller(
 
     speed = abs(v)
     if speed < 20:
-        kp_delta = 2.4
+        kp_delta = 3.0
         kd_delta = 0.35
     elif speed > 70:
-        kp_delta = 2.1
-        kd_delta = 0.85
+        kp_delta = 3.0
+        kd_delta = 0.65
     else:
         alpha = (speed - 20) / 50.0
-        kp_delta = 2.4 - alpha * 0.3
-        kd_delta = 0.35 + alpha * 0.5
+        kp_delta = 3.0 - alpha * 0.0      # stays at 3.0
+        kd_delta = 0.35 + alpha * 0.30
 
     v_delta_cmd = kp_delta * error + kd_delta * d_error
     v_delta_cmd = float(np.clip(v_delta_cmd, v_delta_min, v_delta_max))
