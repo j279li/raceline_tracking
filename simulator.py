@@ -11,11 +11,12 @@ from controller import lower_controller, controller
 
 class Simulator:
 
-    def __init__(self, rt : RaceTrack):
+    def __init__(self, rt : RaceTrack, raceline = None):
         matplotlib.rcParams["figure.dpi"] = 300
         matplotlib.rcParams["font.size"] = 8
 
         self.rt = rt
+        self.raceline = raceline  # Store the raceline
         self.figure, self.axis = plt.subplots(1, 1)
 
         self.axis.set_xlabel("X"); self.axis.set_ylabel("Y")
@@ -74,11 +75,15 @@ class Simulator:
             self.axis.cla()
 
             self.rt.plot_track(self.axis)
+            
+            # Plot the raceline if available
+            if self.raceline is not None:
+                self.axis.plot(self.raceline[:, 0], self.raceline[:, 1], 'r-', linewidth=0.5, alpha=0.7, label='Raceline')
 
             self.axis.set_xlim(self.car.state[0] - 200, self.car.state[0] + 200)
             self.axis.set_ylim(self.car.state[1] - 200, self.car.state[1] + 200)
 
-            desired = controller(self.car.state, self.car.parameters, self.rt)
+            desired = controller(self.car.state, self.car.parameters, self.rt, self.raceline)
             cont = lower_controller(self.car.state, desired, self.car.parameters)
             self.car.update(cont)
             self.update_status()
@@ -108,6 +113,12 @@ class Simulator:
                 fontsize=8, color="Red"
             )
 
+            self.axis.text(
+                self.car.state[0] + 195, self.car.state[1] + 140, "Speed: " + f"{self.car.state[3]:.1f} m/s",
+                horizontalalignment="right", verticalalignment="top",
+                fontsize=8, color="Red"
+            )
+
             self.figure.canvas.draw()
             return True
 
@@ -120,9 +131,30 @@ class Simulator:
         if progress > 10.0 and not self.lap_started:
             self.lap_started = True
     
-        if progress <= 1.0 and self.lap_started and not self.lap_finished:
+        if progress <= 5.0 and self.lap_started and not self.lap_finished:
             self.lap_finished = True
             self.lap_time_elapsed = time() - self.lap_start_time
+            
+            # Print results to console
+            print("\n" + "="*50)
+            print("LAP COMPLETED!")
+            print("="*50)
+            print(f"Lap Time: {self.lap_time_elapsed:.2f} seconds")
+            print(f"Track Violations: {self.track_limit_violations}")
+            print("="*50 + "\n")
+            
+            # Save results to file
+            try:
+                with open("lap_results.txt", "w") as f:
+                    f.write("="*50 + "\n")
+                    f.write("LAP RESULTS\n")
+                    f.write("="*50 + "\n")
+                    f.write(f"Lap Time: {self.lap_time_elapsed:.2f} seconds\n")
+                    f.write(f"Track Violations: {self.track_limit_violations}\n")
+                    f.write("="*50 + "\n")
+                print("Results saved to lap_results.txt")
+            except Exception as e:
+                print(f"Warning: Could not save results to file: {e}")
 
         if not self.lap_finished and self.lap_start_time is not None:
             self.lap_time_elapsed = time() - self.lap_start_time
