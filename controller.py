@@ -64,7 +64,8 @@ def estimate_curvature(path: ArrayLike, idx: int, step: int = 5) -> float:
     denom = a*b*c
     curvature = 0 if denom < 1e-9 else 4*area/denom
 
-    curvature *= 0.35
+    # Slightly higher scaling so tight stuff looks tighter
+    curvature *= 0.50          # was 0.35
     return max(curvature, 0.0005)
 
 # ============================================================================
@@ -75,14 +76,15 @@ def compute_safe_corner_speed(curvature: float, v_max: float) -> float:
     if curvature < 1e-6:
         return v_max
 
+    # More conservative lateral accel limits
     if curvature < 0.008:
-        a_lat = 19.0
+        a_lat = 17.0      # was 19.0
     elif curvature < 0.020:
-        a_lat = 16.5
+        a_lat = 14.0      # was 16.5
     elif curvature < 0.035:
-        a_lat = 14.0
+        a_lat = 11.5      # was 14.0
     else:
-        a_lat = 11.0
+        a_lat = 9.0       # was 11.0
 
     return min(np.sqrt(a_lat / curvature), v_max)
 
@@ -103,10 +105,11 @@ def compute_reference_velocity(state, path, parameters, raceline_mode=False):
 
     base_look = 40
     if current_speed > 60:
-        extra = ((current_speed - 60)**1.3)/2
-        look = min(base_look + current_speed/2.5 + extra, 100)
+        extra = ((current_speed - 60)**1.3) / 2
+        # allow a slightly longer preview so we see the chicane in time
+        look = min(base_look + current_speed/2.5 + extra, 120)  # was 100
     else:
-        look = min(base_look + current_speed/2.5, 80)
+        look = min(base_look + current_speed/2.5, 90)           # was 80
 
     look = int(look)
 
@@ -121,8 +124,8 @@ def compute_reference_velocity(state, path, parameters, raceline_mode=False):
             prev = (closest_idx + i - 1) % len(path)
             cumulative += np.linalg.norm(path[check_idx] - path[prev])
 
-        curv = estimate_curvature(path, check_idx, step=3)
-        if curv > 0.0008:
+        curv = estimate_curvature(path, check_idx, step=2)
+        if curv > 0.0007:
             safe = compute_safe_corner_speed(curv, v_max)
             if safe < min_safe:
                 min_safe = safe
@@ -132,12 +135,15 @@ def compute_reference_velocity(state, path, parameters, raceline_mode=False):
     if not found_corner or min_safe >= current_speed:
         return v_max
 
-    brake_accel = 0.85*a_max
-    needed = compute_braking_distance(current_speed, min_safe, brake_accel)*1.05
+    # More conservative braking model → earlier braking
+    brake_accel = 0.70 * a_max                  # was 0.85 * a_max
+    needed = compute_braking_distance(current_speed, min_safe, brake_accel) * 1.20  # was *1.05
 
     if dist_to_corner <= needed:
+        # Start actually targeting the lower speed
         return min_safe
-    elif dist_to_corner < needed*1.3:
+    elif dist_to_corner < needed * 1.3:
+        # Coasting / gentle transition
         return current_speed
     else:
         return v_max
@@ -153,10 +159,12 @@ def compute_reference_steering(state, path, parameters):
     v = abs(state[3])
     speed = max(v, 1.0)
 
+    # Smoother lookahead (slightly larger)
     if speed < 50:
-        lad = 6.0 + 0.15*speed
+        lad = 7.0 + 0.15*speed   # was 6.0 + 0.15*speed
     else:
-        lad = 13.0 + 0.20*(speed - 50)
+        lad = 14.0 + 0.20*(speed - 50)  # was 13.0
+
     lad *= 0.75
 
     _, lookahead_point = find_lookahead_point(state, path, lad)
@@ -177,7 +185,8 @@ def compute_reference_steering(state, path, parameters):
     Ld = max(np.hypot(lx, ly), 1.0)
     alpha = np.arctan2(ly, lx)
 
-    pp = np.arctan(3.0 * wheelbase * np.sin(alpha) / Ld)
+    # Pure pursuit slightly less aggressive (3.0 → 2.5)
+    pp = np.arctan(2.5 * wheelbase * np.sin(alpha) / Ld)
 
     closest_idx, _ = find_closest_point(state, path)
     nxt = (closest_idx + 1) % len(path)
@@ -189,9 +198,12 @@ def compute_reference_steering(state, path, parameters):
     to_car = np.array([sx, sy]) - path[closest_idx]
     cross_track = path_vec[0]*to_car[1] - path_vec[1]*to_car[0]
 
-    stan = np.arctan(1.8 * cross_track / max(speed, 2.0))
+    # Stanley softened (1.8 → 1.5)
+    stan = np.arctan(1.5 * cross_track / max(speed, 2.0))
 
-    delta_ref = pp + 0.4*stan
+    # Combine with gentler weighting (0.4 → 0.30)
+    delta_ref = pp + 0.30 * stan
+
     return float(np.clip(delta_ref, -delta_max, delta_max))
 
 # ============================================================================
