@@ -6,12 +6,7 @@ from simulator import RaceTrack, Simulator, plt
 if __name__ == "__main__":
     assert(len(argv) == 3)
     racetrack = RaceTrack(argv[1])
-    raceline_path = argv[2]
-    
-    # Load the raceline data
-    raceline_data = np.loadtxt(raceline_path, delimiter=',')
-    raceline = raceline_data[:, 0:2]  # Extract x, y coordinates
-    
-    simulator = Simulator(racetrack, raceline)
+    racetrack.raceline = np.loadtxt(argv[2], comments="#", delimiter=",")[:, 0:2]
+    simulator = Simulator(racetrack)
     simulator.start()
     plt.show()

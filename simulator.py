@@ -3,8 +3,6 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 
-from time import time
-
 from racetrack import RaceTrack
 from racecar import RaceCar
 from controller import lower_controller, controller
@@ -24,11 +22,12 @@ class Simulator:
         self.car = RaceCar(self.rt.initial_state.T)
 
         self.lap_time_elapsed = 0
-        self.lap_start_time = None
         self.lap_finished = False
         self.lap_started = False
         self.track_limit_violations = 0
         self.currently_violating = False
+        self.simulation_time = 0.0  # Track simulation time independently
+        self.lap_start_simulation_time = 0.0  # Track when lap started in simulation time
 
     def check_track_limits(self):
         car_position = self.car.state[0:2]
@@ -75,17 +74,23 @@ class Simulator:
             self.axis.cla()
 
             self.rt.plot_track(self.axis)
-            
-            # Plot the raceline if available
-            if self.raceline is not None:
-                self.axis.plot(self.raceline[:, 0], self.raceline[:, 1], 'r-', linewidth=0.5, alpha=0.7, label='Raceline')
 
             self.axis.set_xlim(self.car.state[0] - 200, self.car.state[0] + 200)
             self.axis.set_ylim(self.car.state[1] - 200, self.car.state[1] + 200)
 
-            desired = controller(self.car.state, self.car.parameters, self.rt, self.raceline)
+            # Always advance simulation by exactly one timestep
+            # This ensures consistent simulation time regardless of callback frequency
+            desired = controller(self.car.state, self.car.parameters, self.rt)
             cont = lower_controller(self.car.state, desired, self.car.parameters)
             self.car.update(cont)
+            
+            # Increment simulation time by car's timestep
+            self.simulation_time += self.car.time_step
+            
+            # Update lap time if lap has started (calculate from start time)
+            if self.lap_started and not self.lap_finished:
+                self.lap_time_elapsed = self.simulation_time - self.lap_start_simulation_time
+            
             self.update_status()
             self.check_track_limits()
 
@@ -130,10 +135,14 @@ class Simulator:
 
         if progress > 10.0 and not self.lap_started:
             self.lap_started = True
+            # Record simulation time when lap starts
+            self.lap_start_simulation_time = self.simulation_time
+            self.lap_time_elapsed = 0.0
     
-        if progress <= 5.0 and self.lap_started and not self.lap_finished:
+        if progress <= 10.0 and self.lap_started and not self.lap_finished:
             self.lap_finished = True
-            self.lap_time_elapsed = time() - self.lap_start_time
+            # Calculate final lap time from simulation time
+            self.lap_time_elapsed = self.simulation_time - self.lap_start_simulation_time
             
             # Print results to console
             print("\n" + "="*50)
@@ -156,12 +165,8 @@ class Simulator:
             except Exception as e:
                 print(f"Warning: Could not save results to file: {e}")
 
-        if not self.lap_finished and self.lap_start_time is not None:
-            self.lap_time_elapsed = time() - self.lap_start_time
-
     def start(self):
         # Run the simulation loop every 1 millisecond.
         self.timer = self.figure.canvas.new_timer(interval=1)
         self.timer.add_callback(self.run)
-        self.lap_start_time = time()
         self.timer.start()

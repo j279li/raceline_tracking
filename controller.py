@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.typing import ArrayLike
 
-from simulator import RaceTrack
+from racetrack import RaceTrack
 
 # ============================================================================
 # Helper functions
@@ -81,37 +81,24 @@ def estimate_curvature(path: ArrayLike, idx: int, step: int = 5) -> float:
 
 def compute_safe_corner_speed(
     curvature: float,
-    v_max: float,
-    raceline_mode: bool = False
+    v_max: float
 ) -> float:
     """
     Calculate safe corner speed with curvature-dependent lateral acceleration.
-
-    raceline_mode=True → allow higher lateral acceleration (more grip / risk).
+    Uses raceline limits (higher lateral g allowed).
     """
     if curvature < 1e-6:
         return v_max
 
-    if raceline_mode:
-        # Raceline: slightly higher allowable lateral g
-        if curvature < 0.008:
-            a_lateral_max = 19.0  # m/s²
-        elif curvature < 0.020:
-            a_lateral_max = 16.5
-        elif curvature < 0.035:
-            a_lateral_max = 14.0
-        else:
-            a_lateral_max = 11.0
+    # Raceline: higher allowable lateral g
+    if curvature < 0.008:
+        a_lateral_max = 19.0  # m/s²
+    elif curvature < 0.020:
+        a_lateral_max = 16.5
+    elif curvature < 0.035:
+        a_lateral_max = 14.0
     else:
-        # Centerline: a bit more conservative
-        if curvature < 0.008:
-            a_lateral_max = 17.0  # m/s²
-        elif curvature < 0.020:
-            a_lateral_max = 14.5
-        elif curvature < 0.035:
-            a_lateral_max = 12.0
-        else:
-            a_lateral_max = 9.5
+        a_lateral_max = 11.0
 
     v_safe = np.sqrt(a_lateral_max / curvature)
     return min(v_safe, v_max)
@@ -140,7 +127,7 @@ def compute_reference_velocity(
     S1: Physics-based velocity planning.
 
     1. Scan ahead on path to find tightest upcoming corner.
-    2. Compute safe speed from curvature (with raceline vs centerline limits).
+    2. Compute safe speed from curvature (using raceline limits).
     3. Use braking distance to decide if we must slow down now.
     """
     v_min = float(parameters[2])
@@ -160,8 +147,6 @@ def compute_reference_velocity(
     min_safe_speed = v_max
     distance_to_corner = 0.0
     found_corner = False
-    last_corner_sign = None
-    last_corner_distance = None
 
     cumulative_distance = 0.0
     for i in range(lookahead_points):
@@ -175,63 +160,21 @@ def compute_reference_velocity(
         curv = estimate_curvature(path, check_idx, step=3)
 
         if curv > 0.0008:  # catch even slight curves
-            safe_speed = compute_safe_corner_speed(
-                curv, v_max, raceline_mode=raceline_mode
-            )
+            safe_speed = compute_safe_corner_speed(curv, v_max)
 
-            # Determine turn direction for S-curve detection
-            turn_sign = 0.0
-            if curv > 0.010:
-                prev_idx = (check_idx - 1) % len(path)
-                next_idx = (check_idx + 1) % len(path)
-                v1 = path[check_idx] - path[prev_idx]
-                v2 = path[next_idx] - path[check_idx]
-                cross = v1[0] * v2[1] - v1[1] * v2[0]
-                if abs(cross) > 1e-9:
-                    turn_sign = np.sign(cross)
-
-            # Extra safety margins, lighter for raceline
-            if raceline_mode:
-                if curv > 0.030:
-                    safe_speed *= 0.80
-                elif curv > 0.020:
-                    safe_speed *= 0.86
-                elif curv > 0.012:
-                    safe_speed *= 0.92
-                elif curv > 0.006:
-                    safe_speed *= 0.96
-                elif curv > 0.003:
-                    safe_speed *= 0.985
-                else:
-                    safe_speed *= 0.998
+            # Extra safety margins for raceline
+            if curv > 0.030:
+                safe_speed *= 0.80
+            elif curv > 0.020:
+                safe_speed *= 0.86
+            elif curv > 0.012:
+                safe_speed *= 0.92
+            elif curv > 0.006:
+                safe_speed *= 0.96
+            elif curv > 0.003:
+                safe_speed *= 0.985
             else:
-                if curv > 0.030:
-                    safe_speed *= 0.76
-                elif curv > 0.020:
-                    safe_speed *= 0.82
-                elif curv > 0.012:
-                    safe_speed *= 0.88
-                elif curv > 0.006:
-                    safe_speed *= 0.94
-                elif curv > 0.003:
-                    safe_speed *= 0.97
-                else:
-                    safe_speed *= 0.995
-
-            # Mild S-curve penalty ONLY for centerline mode
-            if (
-                not raceline_mode
-                and turn_sign != 0.0
-                and last_corner_sign is not None
-                and last_corner_distance is not None
-            ):
-                gap = cumulative_distance - last_corner_distance
-                if (turn_sign * last_corner_sign) < 0 and gap < 40.0:
-                    safe_speed *= 0.94
-
-            if turn_sign != 0.0:
-                last_corner_sign = turn_sign
-                last_corner_distance = cumulative_distance
+                safe_speed *= 0.998
 
             if safe_speed < min_safe_speed:
                 min_safe_speed = safe_speed
@@ -262,13 +205,12 @@ def compute_reference_velocity(
 
 def compute_reference_steering(
     state: ArrayLike,
-    centerline: ArrayLike,
-    parameters: ArrayLike,
-    raceline_mode: bool = False
+    path: ArrayLike,
+    parameters: ArrayLike
 ) -> float:
     """
     S2: Pure pursuit steering plus a light Stanley-style cross-track correction.
-    Lookahead adapts to speed; raceline_mode uses slightly shorter lookahead.
+    Lookahead adapts to speed; uses shorter lookahead for raceline.
     """
     wheelbase = float(parameters[0])
     delta_max = float(parameters[4])
@@ -276,16 +218,15 @@ def compute_reference_steering(
     v = float(state[3])
     speed = max(abs(v), 1.0)
 
-    # Speed-based lookahead
+    # Speed-based lookahead (shorter for raceline)
     if speed < 50:
         lookahead_distance = 8.0 + 0.30 * speed
     else:
         lookahead_distance = 23.0 + 0.45 * (speed - 50)
+    
+    lookahead_distance *= 0.9  # Shorter lookahead for raceline
 
-    if raceline_mode:
-        lookahead_distance *= 0.9
-
-    _, lookahead_point = find_lookahead_point(state, centerline, lookahead_distance)
+    _, lookahead_point = find_lookahead_point(state, path, lookahead_distance)
 
     sx, sy = state[0], state[1]
     heading = state[4]
@@ -311,26 +252,26 @@ def compute_reference_steering(
     pure_pursuit_steer = np.arctan2(2.0 * wheelbase * np.sin(alpha), Ld)
 
     # Stanley correction
-    closest_idx, _ = find_closest_point(state, centerline)
-    next_idx = (closest_idx + 1) % len(centerline)
+    closest_idx, _ = find_closest_point(state, path)
+    next_idx = (closest_idx + 1) % len(path)
 
-    path_vec = centerline[next_idx] - centerline[closest_idx]
+    path_vec = path[next_idx] - path[closest_idx]
     path_len = np.linalg.norm(path_vec)
     if path_len > 1e-6:
         path_vec = path_vec / path_len
     else:
         path_vec = np.array([1.0, 0.0])
 
-    to_car = np.array([sx, sy]) - centerline[closest_idx]
+    to_car = np.array([sx, sy]) - path[closest_idx]
 
     cross_track_error = path_vec[0] * to_car[1] - path_vec[1] * to_car[0]
 
-    k_stanley = 0.8 if raceline_mode else 0.5
+    k_stanley = 0.8  # Raceline mode
     stanley_correction = np.arctan(
         k_stanley * cross_track_error / max(abs(speed), 2.0)
     )
 
-    correction_weight = 0.22 if raceline_mode else 0.15
+    correction_weight = 0.22  # Raceline mode
     delta_ref = pure_pursuit_steer + correction_weight * stanley_correction
 
     delta_ref = float(np.clip(delta_ref, -0.9 * delta_max, 0.9 * delta_max))
@@ -414,61 +355,24 @@ def steering_controller(
 # High level and low level controller interfaces
 # ============================================================================
 
-def compute_safe_raceline(
-    raceline: ArrayLike,
-    racetrack: RaceTrack,
-    safety_margin: float = 0.7
-) -> ArrayLike:
-    """
-    (Currently UNUSED in controller)
-    Compute a "safe" raceline that maintains a margin from track boundaries.
-    """
-    safe_raceline = raceline.copy()
-
-    for i in range(len(raceline)):
-        point = raceline[i]
-
-        centerline_dists = np.linalg.norm(racetrack.centerline - point, axis=1)
-        closest_center_idx = np.argmin(centerline_dists)
-
-        right_boundary = racetrack.right_boundary[closest_center_idx]
-        left_boundary = racetrack.left_boundary[closest_center_idx]
-        center_point = racetrack.centerline[closest_center_idx]
-
-        dist_to_right = np.linalg.norm(point - right_boundary)
-        dist_to_left = np.linalg.norm(point - left_boundary)
-
-        if dist_to_right < safety_margin:
-            direction_to_center = center_point - point
-            direction_to_center /= (np.linalg.norm(direction_to_center) + 1e-6)
-            safe_raceline[i] = point + direction_to_center * (safety_margin - dist_to_right)
-        elif dist_to_left < safety_margin:
-            direction_to_center = center_point - point
-            direction_to_center /= (np.linalg.norm(direction_to_center) + 1e-6)
-            safe_raceline[i] = point + direction_to_center * (safety_margin - dist_to_left)
-
-    return safe_raceline
-
-
 def controller(
     state: ArrayLike,
     parameters: ArrayLike,
-    racetrack: RaceTrack,
-    raceline: ArrayLike | None = None
+    racetrack: RaceTrack
 ) -> ArrayLike:
     """
     High level controller:
-      - Uses raceline if provided, otherwise centerline.
-      - Raceline mode allows higher lateral g and slightly tighter tracking.
+      - Always uses raceline from racetrack.raceline.
+      - Uses raceline limits for higher lateral g and tighter tracking.
     """
-    using_raceline = raceline is not None
-    if using_raceline:
-        path = raceline          # use raw raceline (no reshaping)
-    else:
-        path = racetrack.centerline
+    # Extract raceline from racetrack
+    if not hasattr(racetrack, 'raceline') or racetrack.raceline is None:
+        raise ValueError("Raceline not found in racetrack. Ensure raceline is attached to racetrack object.")
+    
+    path = racetrack.raceline
 
-    v_ref = compute_reference_velocity(state, path, parameters, raceline_mode=using_raceline)
-    delta_ref = compute_reference_steering(state, path, parameters, raceline_mode=using_raceline)
+    v_ref = compute_reference_velocity(state, path, parameters)
+    delta_ref = compute_reference_steering(state, path, parameters)
 
     return np.array([delta_ref, v_ref])
 
