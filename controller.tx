@@ -65,7 +65,7 @@ def estimate_curvature(path: ArrayLike, idx: int, step: int = 5) -> float:
     curvature = 0 if denom < 1e-9 else 4*area/denom
 
     # Slightly higher scaling so tight stuff looks tighter
-    curvature *= 0.65          # was 0.35
+    curvature *= 0.50          # was 0.35
     return max(curvature, 0.0005)
 
 # ============================================================================
@@ -78,11 +78,11 @@ def compute_safe_corner_speed(curvature: float, v_max: float) -> float:
 
     # More conservative lateral accel limits
     if curvature < 0.008:
-        a_lat = 20.0      # was 19.0
+        a_lat = 17.0      # was 19.0
     elif curvature < 0.020:
-        a_lat = 16.0      # was 16.5
+        a_lat = 14.0      # was 16.5
     elif curvature < 0.035:
-        a_lat = 12.5      # was 14.0
+        a_lat = 11.5      # was 14.0
     else:
         a_lat = 9.0       # was 11.0
 
@@ -142,7 +142,7 @@ def compute_reference_velocity(state, path, parameters, raceline_mode=False):
     if dist_to_corner <= needed:
         # At corner - hit target speed
         return min_safe
-    elif dist_to_corner < needed * 2.15: 
+    elif dist_to_corner < needed * 1.15:
         # Very short transition zone
         transition = (dist_to_corner - needed) / (needed * 0.15)
         return current_speed * transition + min_safe * (1 - transition)
@@ -162,11 +162,11 @@ def compute_reference_steering(state, path, parameters):
 
     # Smoother lookahead (slightly larger)
     if speed < 50:
-        lad = 7.0 + 0.20*speed   # was 6.0 + 0.15*speed
+        lad = 7.0 + 0.15*speed   # was 6.0 + 0.15*speed
     else:
-        lad = 14.0 + 0.30*(speed - 50)  # was 13.0
+        lad = 14.0 + 0.20*(speed - 50)  # was 13.0
 
-    lad *= 0.85
+    lad *= 0.75
 
     _, lookahead_point = find_lookahead_point(state, path, lad)
 
@@ -200,10 +200,10 @@ def compute_reference_steering(state, path, parameters):
     cross_track = path_vec[0]*to_car[1] - path_vec[1]*to_car[0]
 
     # Stanley softened (1.8 → 1.5)
-    stan = np.arctan(1.7 * cross_track / max(speed, 2.0))
+    stan = np.arctan(1.5 * cross_track / max(speed, 2.0))
 
     # Combine with gentler weighting (0.4 → 0.30)
-    delta_ref = pp + 0.35 * stan
+    delta_ref = pp + 0.30 * stan
 
     return float(np.clip(delta_ref, -delta_max, delta_max))
 
@@ -239,11 +239,11 @@ def steering_controller(state, delta_ref, parameters, prev_error=0.0, dt=0.1):
     d_error = (error - prev_error) / dt
 
     if v < 20:
-        kp, kd = 3.0, 0.50
+        kp, kd = 3.0, 0.35
     elif v > 70:
-        kp, kd = 3.0, 0.85
+        kp, kd = 3.0, 0.65
     else:
-        kd = 0.50 + (v - 20)/50 * 0.40
+        kd = 0.35 + (v - 20)/50 * 0.30
         kp = 3.0
 
     v_delta = kp*error + kd*d_error
@@ -272,7 +272,7 @@ def controller(state: ArrayLike, parameters: ArrayLike, racetrack: RaceTrack) ->
     progress_m = controller.arc_len[idx]   # meters from start of lap
 
     # --- compute blending weight ---
-    TRANSITION_M = 150.0   # distance to shift centerline → raceline
+    TRANSITION_M = 200.0   # distance to shift centerline → raceline
     w = max(0.0, min(1.0, 1.0 - progress_m / TRANSITION_M))
 
     # --- compute centerline and resample ---
