@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 
+from time import time
+
 from racetrack import RaceTrack
 from racecar import RaceCar
 from controller import lower_controller, controller
@@ -22,12 +24,13 @@ class Simulator:
         self.car = RaceCar(self.rt.initial_state.T)
 
         self.lap_time_elapsed = 0
+        self.lap_start_time = None
         self.lap_finished = False
         self.lap_started = False
         self.track_limit_violations = 0
         self.currently_violating = False
-        self.simulation_time = 0.0  # Track simulation time independently
-        self.lap_start_simulation_time = 0.0  # Track when lap started in simulation time
+        # self.simulation_time = 0.0  # Track simulation time independently
+        # self.lap_start_simulation_time = 0.0  # Track when lap started in simulation time
 
     def check_track_limits(self):
         car_position = self.car.state[0:2]
@@ -85,11 +88,11 @@ class Simulator:
             self.car.update(cont)
             
             # Increment simulation time by car's timestep
-            self.simulation_time += self.car.time_step
+            # self.simulation_time += self.car.time_step
             
             # Update lap time if lap has started (calculate from start time)
-            if self.lap_started and not self.lap_finished:
-                self.lap_time_elapsed = self.simulation_time - self.lap_start_simulation_time
+            # if self.lap_started and not self.lap_finished:
+                # self.lap_time_elapsed = self.simulation_time - self.lap_start_simulation_time
             
             self.update_status()
             self.check_track_limits()
@@ -118,11 +121,11 @@ class Simulator:
                 fontsize=8, color="Red"
             )
 
-            self.axis.text(
-                self.car.state[0] + 195, self.car.state[1] + 140, "Speed: " + f"{self.car.state[3]:.1f} m/s",
-                horizontalalignment="right", verticalalignment="top",
-                fontsize=8, color="Red"
-            )
+            # self.axis.text(
+            #     self.car.state[0] + 195, self.car.state[1] + 140, "Speed: " + f"{self.car.state[3]:.1f} m/s",
+            #     horizontalalignment="right", verticalalignment="top",
+            #     fontsize=8, color="Red"
+            # )
 
             self.figure.canvas.draw()
             return True
@@ -136,16 +139,21 @@ class Simulator:
         if progress > 10.0 and not self.lap_started:
             self.lap_started = True
             # Record simulation time when lap starts
-            self.lap_start_simulation_time = self.simulation_time
-            self.lap_time_elapsed = 0.0
+            # self.lap_start_simulation_time = self.simulation_time
+            # self.lap_time_elapsed = 0.0
     
         if progress <= 10.0 and self.lap_started and not self.lap_finished:
             self.lap_finished = True
             # Calculate final lap time from simulation time
-            self.lap_time_elapsed = self.simulation_time - self.lap_start_simulation_time
+            self.lap_time_elapsed = time() - self.lap_start_time
+            # self.lap_time_elapsed = self.simulation_time - self.lap_start_simulation_time
+        
+        if not self.lap_finished and self.lap_start_time is not None:
+            self.lap_time_elapsed = time() - self.lap_start_time
+            
             
             # Print results to console
-            print("\n" + "="*50)
+            """print("\n" + "="*50)
             print("LAP COMPLETED!")
             print("="*50)
             print(f"Lap Time: {self.lap_time_elapsed:.2f} seconds")
@@ -164,9 +172,10 @@ class Simulator:
                 print("Results saved to lap_results.txt")
             except Exception as e:
                 print(f"Warning: Could not save results to file: {e}")
-
+            """
     def start(self):
         # Run the simulation loop every 1 millisecond.
         self.timer = self.figure.canvas.new_timer(interval=1)
         self.timer.add_callback(self.run)
+        self.lap_start_time = time()
         self.timer.start()
