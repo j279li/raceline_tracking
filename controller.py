@@ -78,13 +78,15 @@ def compute_safe_corner_speed(curvature: float, v_max: float) -> float:
 
     # More conservative lateral accel limits
     if curvature < 0.008:
-        a_lat = 20.0      # was 19.0
+        a_lat = 24.5      # was 19.0
     elif curvature < 0.020:
-        a_lat = 16.0      # was 16.5
+        a_lat = 17.0      # was 16.5
     elif curvature < 0.035:
         a_lat = 12.5      # was 14.0
+    elif curvature < 0.045:
+        a_lat = 11.5      # was 13.0
     else:
-        a_lat = 9.0       # was 11.0
+        a_lat = 10.0       # was 11.0
 
     return min(np.sqrt(a_lat / curvature), v_max)
 
@@ -142,10 +144,10 @@ def compute_reference_velocity(state, path, parameters, raceline_mode=False):
     if dist_to_corner <= needed:
         # At corner - hit target speed
         return min_safe
-    elif dist_to_corner < needed * 2.15: 
-        # Very short transition zone
-        transition = (dist_to_corner - needed) / (needed * 0.15)
-        return current_speed * transition + min_safe * (1 - transition)
+    # elif dist_to_corner < needed * 1.5: 
+    #     # Very short transition zone
+    #     transition = (dist_to_corner - needed) / (needed * 0.15)
+    #     return current_speed * transition + min_safe * (1 - transition)
     else:
         return v_max
 
@@ -200,10 +202,10 @@ def compute_reference_steering(state, path, parameters):
     cross_track = path_vec[0]*to_car[1] - path_vec[1]*to_car[0]
 
     # Stanley softened (1.8 → 1.5)
-    stan = np.arctan(1.7 * cross_track / max(speed, 2.0))
+    stan = np.arctan(1.9 * cross_track / max(speed, 2.0))
 
     # Combine with gentler weighting (0.4 → 0.30)
-    delta_ref = pp + 0.35 * stan
+    delta_ref = pp + 0.38 * stan
 
     return float(np.clip(delta_ref, -delta_max, delta_max))
 
