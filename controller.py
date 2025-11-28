@@ -1,13 +1,11 @@
 import numpy as np
 from numpy.typing import ArrayLike
-
 from racetrack import RaceTrack
 
-# ============================================================================
 # Helper functions
-# ============================================================================
 
 def resample_path(path: np.ndarray, new_len: int) -> np.ndarray:
+    """Resample a path to a specified number of points."""
     old_len = len(path)
     old_idx = np.linspace(0, 1, old_len)
     new_idx = np.linspace(0, 1, new_len)
@@ -16,22 +14,21 @@ def resample_path(path: np.ndarray, new_len: int) -> np.ndarray:
         np.interp(new_idx, old_idx, path[:, 1])
     ])
 
-
 def compute_arc_length(path: np.ndarray) -> np.ndarray:
     """Compute cumulative arc length along a path."""
     diffs = np.diff(path, axis=0)
     seg_lengths = np.sqrt(np.sum(diffs**2, axis=1))
     return np.concatenate([[0.0], np.cumsum(seg_lengths)])
 
-
 def find_closest_point(state: ArrayLike, path: ArrayLike) -> tuple[int, float]:
+    """Find the closest point on the path to the car's position."""
     car_pos = state[0:2]
     distances = np.linalg.norm(path - car_pos, axis=1)
     idx = int(np.argmin(distances))
     return idx, float(distances[idx])
 
-
 def find_lookahead_point(state: ArrayLike, path: ArrayLike, lookahead_distance: float):
+    """Find the lookahead point along the path."""
     closest_idx, _ = find_closest_point(state, path)
     cumulative_dist = 0.0
     lookahead_idx = closest_idx
@@ -46,8 +43,8 @@ def find_lookahead_point(state: ArrayLike, path: ArrayLike, lookahead_distance: 
 
     return lookahead_idx, path[lookahead_idx]
 
-
 def estimate_curvature(path: ArrayLike, idx: int, step: int = 5) -> float:
+    """Estimate the curvature at a given index on the path."""
     N = len(path)
     i1, i2, i3 = (idx-step) % N, idx % N, (idx+step) % N
     p1, p2, p3 = path[i1], path[i2], path[i3]
@@ -61,44 +58,40 @@ def estimate_curvature(path: ArrayLike, idx: int, step: int = 5) -> float:
     b = np.linalg.norm(p3 - p2)
     c = np.linalg.norm(p1 - p3)
 
-    denom = a*b*c
-    curvature = 0 if denom < 1e-9 else 4*area/denom
+    denom = a * b * c
+    curvature = 0 if denom < 1e-9 else 4 * area / denom
 
-    # Slightly higher scaling so tight stuff looks tighter
-    curvature *= 0.65          # was 0.35
+    curvature *= 0.65  # Scaling factor for tightness
     return max(curvature, 0.0005)
 
-# ============================================================================
-# S1 – Velocity reference
-# ============================================================================
+# S1 - Velocity reference
 
 def compute_safe_corner_speed(curvature: float, v_max: float) -> float:
+    """Compute a safe speed for a given corner based on curvature."""
     if curvature < 1e-6:
         return v_max
 
-    # More conservative lateral accel limits
     if curvature < 0.008:
-        a_lat = 25.0      # was 19.0
+        a_lat = 25.0
     elif curvature < 0.020:
-        a_lat = 17.0      # was 16.5
+        a_lat = 17.0
     elif curvature < 0.040:
-        a_lat = 12.5      # was 14.0
+        a_lat = 12.5
     elif curvature < 0.050:
-        a_lat = 11.0       # was 11.0
+        a_lat = 11.5
     else:
-        a_lat = 10.0       # was 9.0
-    
+        a_lat = 10.0
 
     return min(np.sqrt(a_lat / curvature), v_max)
 
-
 def compute_braking_distance(v_current, v_target, a_brake):
+    """Compute the braking distance required to slow down to a target speed."""
     if v_current <= v_target:
         return 0.0
-    return max((v_current**2 - v_target**2) / (2*a_brake), 0.0)
-
+    return max((v_current**2 - v_target**2) / (2 * a_brake), 0.0)
 
 def compute_reference_velocity(state, path, parameters, raceline_mode=False):
+    """Compute the reference velocity for the car based on the path."""
     v_min = float(parameters[2])
     v_max = float(parameters[5])
     a_max = float(parameters[10])
@@ -109,10 +102,9 @@ def compute_reference_velocity(state, path, parameters, raceline_mode=False):
     base_look = 40
     if current_speed > 60:
         extra = ((current_speed - 60)**1.3) / 2
-        # allow a slightly longer preview so we see the chicane in time
-        look = min(base_look + current_speed/2.5 + extra, 120)  # was 100
+        look = min(base_look + current_speed / 2.5 + extra, 120)
     else:
-        look = min(base_look + current_speed/2.5, 90)           # was 80
+        look = min(base_look + current_speed / 2.5, 90)
 
     look = int(look)
 
@@ -138,36 +130,28 @@ def compute_reference_velocity(state, path, parameters, raceline_mode=False):
     if not found_corner or min_safe >= current_speed:
         return v_max
 
-    # Aggressive braking closer to corner
-    brake_accel = 0.95 * a_max                  # use most of available deceleration
-    needed = compute_braking_distance(current_speed, min_safe, brake_accel) * 0.95  # tight braking distance
+    brake_accel = 0.95 * a_max
+    needed = compute_braking_distance(current_speed, min_safe, brake_accel) * 0.95
 
     if dist_to_corner <= needed:
-        # At corner - hit target speed
         return min_safe
-    # elif dist_to_corner < needed * 1.5: 
-    #     # Very short transition zone
-    #     transition = (dist_to_corner - needed) / (needed * 0.15)
-    #     return current_speed * transition + min_safe * (1 - transition)
     else:
         return v_max
 
-# ============================================================================
-# S2 – Steering reference
-# ============================================================================
+# S2 - Steering reference
 
 def compute_reference_steering(state, path, parameters):
+    """Compute the reference steering angle for the car."""
     wheelbase = float(parameters[0])
     delta_max = float(parameters[4])
 
     v = abs(state[3])
     speed = max(v, 1.0)
 
-    # Smoother lookahead (slightly larger)
     if speed < 50:
-        lad = 7.0 + 0.20*speed   # was 6.0 + 0.15*speed
+        lad = 7.0 + 0.20 * speed
     else:
-        lad = 13.0 + 0.28*(speed - 50)  # was 13.0
+        lad = 13.0 + 0.28 * (speed - 50)
 
     lad *= 0.83
 
@@ -182,14 +166,13 @@ def compute_reference_steering(state, path, parameters):
     cos_h = np.cos(-heading)
     sin_h = np.sin(-heading)
 
-    lx = dx*cos_h - dy*sin_h
-    ly = dx*sin_h + dy*cos_h
+    lx = dx * cos_h - dy * sin_h
+    ly = dx * sin_h + dy * cos_h
     lx = max(lx, 0.5)
 
     Ld = max(np.hypot(lx, ly), 1.0)
     alpha = np.arctan2(ly, lx)
 
-    # Pure pursuit slightly less aggressive (3.0 → 2.5)
     pp = np.arctan(2.5 * wheelbase * np.sin(alpha) / Ld)
 
     closest_idx, _ = find_closest_point(state, path)
@@ -200,38 +183,38 @@ def compute_reference_steering(state, path, parameters):
     path_vec = path_vec / norm if norm > 1e-6 else np.array([1.0, 0.0])
 
     to_car = np.array([sx, sy]) - path[closest_idx]
-    cross_track = path_vec[0]*to_car[1] - path_vec[1]*to_car[0]
+    cross_track = path_vec[0] * to_car[1] - path_vec[1] * to_car[0]
 
-    # Stanley softened (1.8 → 1.5)
     stan = np.arctan(1.9 * cross_track / max(speed, 2.0))
 
-    # Combine with gentler weighting (0.4 → 0.30)
     delta_ref = pp + 0.38 * stan
 
     return float(np.clip(delta_ref, -delta_max, delta_max))
 
-# ============================================================================
-# Low level
-# ============================================================================
+# Low-level controllers
 
 def velocity_controller(state, v_ref, parameters):
+    """Low-level velocity controller."""
     v = float(state[3])
     a_max = float(parameters[10])
 
     error = v_ref - v
 
     if error < 0:
-        if v < 50: kp = 4.5
-        elif v > 90: kp = 5.8
-        else: kp = 4.5 + (v - 50)/40 * 1.3
+        if v < 50:
+            kp = 4.5
+        elif v > 90:
+            kp = 5.8
+        else:
+            kp = 4.5 + (v - 50) / 40 * 1.3
     else:
         kp = 3.5
 
     a = kp * error
     return float(np.clip(a, -a_max, a_max))
 
-
 def steering_controller(state, delta_ref, parameters, prev_error=0.0, dt=0.1):
+    """Low-level steering controller."""
     delta = float(state[2])
     v = abs(state[3])
 
@@ -246,55 +229,47 @@ def steering_controller(state, delta_ref, parameters, prev_error=0.0, dt=0.1):
     elif v > 70:
         kp, kd = 3.0, 0.85
     else:
-        kd = 0.50 + (v - 20)/50 * 0.42
+        kd = 0.50 + (v - 20) / 50 * 0.42
         kp = 3.0
 
-    v_delta = kp*error + kd*d_error
+    v_delta = kp * error + kd * d_error
     v_delta = np.clip(v_delta, v_delta_min, v_delta_max)
 
     return float(v_delta), error
 
-# ============================================================================
-# High level controller – with **correct progress-based spatial blending**
-# ============================================================================
+# High-level controller
 
 def controller(state: ArrayLike, parameters: ArrayLike, racetrack: RaceTrack) -> ArrayLike:
-
+    """High-level controller for path blending and reference computation."""
     if racetrack.raceline is None:
         raise ValueError("Raceline not found")
 
     raceline = racetrack.raceline
 
-    # --- compute arc length once ---
     if not hasattr(controller, "arc_len"):
         controller.arc_len = compute_arc_length(raceline)
         controller.total_len = controller.arc_len[-1]
 
-    # --- compute car progress ---
     idx, _ = find_closest_point(state, raceline)
-    progress_m = controller.arc_len[idx]   # meters from start of lap
+    progress_m = controller.arc_len[idx]
 
-    # --- compute blending weight ---
-    TRANSITION_M = 150.0   # distance to shift centerline → raceline
+    TRANSITION_M = 150.0
     w = max(0.0, min(1.0, 1.0 - progress_m / TRANSITION_M))
 
-    # --- compute centerline and resample ---
     center_raw = (racetrack.left_boundary + racetrack.right_boundary) / 2.0
     center_resampled = resample_path(center_raw, len(raceline))
 
-    # --- blended path ---
     path = w * center_resampled + (1 - w) * raceline
 
-    # --- compute references ---
     v_ref = compute_reference_velocity(state, path, parameters)
     delta_ref = compute_reference_steering(state, path, parameters)
 
     return np.array([delta_ref, v_ref])
 
-
 _prev_steering_error = 0.0
 
 def lower_controller(state, desired, parameters):
+    """Low-level controller for velocity and steering."""
     global _prev_steering_error
 
     delta_ref, v_ref = float(desired[0]), float(desired[1])
