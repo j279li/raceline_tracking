@@ -78,15 +78,16 @@ def compute_safe_corner_speed(curvature: float, v_max: float) -> float:
 
     # More conservative lateral accel limits
     if curvature < 0.008:
-        a_lat = 24.5      # was 19.0
+        a_lat = 25.0      # was 19.0
     elif curvature < 0.020:
         a_lat = 17.0      # was 16.5
-    elif curvature < 0.035:
+    elif curvature < 0.040:
         a_lat = 12.5      # was 14.0
-    elif curvature < 0.045:
-        a_lat = 11.5      # was 13.0
+    elif curvature < 0.050:
+        a_lat = 11.0       # was 11.0
     else:
-        a_lat = 10.0       # was 11.0
+        a_lat = 10.0       # was 9.0
+    
 
     return min(np.sqrt(a_lat / curvature), v_max)
 
@@ -166,9 +167,9 @@ def compute_reference_steering(state, path, parameters):
     if speed < 50:
         lad = 7.0 + 0.20*speed   # was 6.0 + 0.15*speed
     else:
-        lad = 14.0 + 0.30*(speed - 50)  # was 13.0
+        lad = 13.0 + 0.28*(speed - 50)  # was 13.0
 
-    lad *= 0.85
+    lad *= 0.83
 
     _, lookahead_point = find_lookahead_point(state, path, lad)
 
@@ -245,7 +246,7 @@ def steering_controller(state, delta_ref, parameters, prev_error=0.0, dt=0.1):
     elif v > 70:
         kp, kd = 3.0, 0.85
     else:
-        kd = 0.50 + (v - 20)/50 * 0.40
+        kd = 0.50 + (v - 20)/50 * 0.42
         kp = 3.0
 
     v_delta = kp*error + kd*d_error
